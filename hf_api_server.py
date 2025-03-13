@@ -20,7 +20,7 @@ request_queue = Queue()
 models: Dict[str, object] = {}
 current_model: Optional[str] = None  # Track the currently loaded model
 
-MODEL_DIR = "C:/WorkingFolder/Models"
+MODEL_DIR = "C:/Models"
 
 CONFIG_FILE = "config.json"
 
