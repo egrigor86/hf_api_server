@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+    from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from pydantic import BaseModel
 from queue import Queue
 import threading
@@ -78,8 +78,19 @@ threading.Thread(target=request_worker, daemon=True).start()
 def process_request(request_data, response_queue):
     global current_model
 
-    model_name = request_data["model"]
-    messages = request_data["messages"]
+    # Debugging: show request data
+    print(f"[DEBUG] Received request: {request_data}")
+
+    model_name = request_data.get("model", current_model)
+    if model_name is None:
+        response_queue.put(JSONResponse(content={"error": "No model specified and no model currently loaded."}, status_code=400))
+        return
+
+    messages = request_data.get("messages", [])
+    if not messages:
+        response_queue.put(JSONResponse(content={"error": "'messages' field is missing or empty"}, status_code=400))
+        return
+
     temperature = request_data.get("temperature", 0.7)
     top_p = request_data.get("top_p", 0.9)
     repetition_penalty = request_data.get("repetition_penalty", 1.2)
@@ -91,9 +102,7 @@ def process_request(request_data, response_queue):
         response_queue.put(JSONResponse(content={"error": "Model not loaded"}, status_code=404))
         return
 
-    # Detect if autocomplete (OpenWebUI sends these specially)
     is_autocomplete = any("Task" in msg["content"] for msg in messages)
-
     user_input = messages[-1]["content"]
 
     if is_autocomplete:
@@ -104,18 +113,24 @@ def process_request(request_data, response_queue):
 
     model_data = models[current_model]
 
+    # Response generation (Llama or HF)
     if isinstance(model_data, Llama):  # GGUF Model
         prompt = f"User: {user_input}"
-        output = model_data(prompt, max_tokens=2048, temperature=temperature, top_p=top_p, repeat_penalty=repetition_penalty)
+        output = model_data(prompt, max_tokens=8000, temperature=temperature, top_p=top_p, repeat_penalty=repetition_penalty)
         response_text = output["choices"][0]["text"]
-    else:  # Hugging Face Model
+    else:
         tokenizer, model = model_data
         device = "cuda" if torch.cuda.is_available() else "cpu"
         chat_prompt = f"User: {user_input}"
         inputs = tokenizer(chat_prompt, return_tensors="pt").to(device)
         output_ids = model.generate(**inputs, max_new_tokens=256, temperature=temperature, top_p=top_p, repetition_penalty=repetition_penalty, do_sample=True)
         response_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
-
+        # Strip common prefixes if present
+        for prefix in ["ModelAnswer:", "Answer:", "Bot:", "Assistant:"]:
+            if prefix in response_text:
+                response_text = response_text.split(prefix, 1)[1].strip()
+                break
+    # Format response
     if is_autocomplete:
         response = {"text": response_text.strip()}
     else:
@@ -123,7 +138,7 @@ def process_request(request_data, response_queue):
             "id": f"chatcmpl-{uuid.uuid4()}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": model_name,
+            "model": current_model,
             "choices": [
                 {
                     "index": 0,
